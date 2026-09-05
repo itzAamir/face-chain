@@ -61,3 +61,14 @@ def test_bundled_models_load_and_run_blank_inference() -> None:
     service.warmup()
     assert service.models_ready is True
     assert service.detect(np.zeros((480, 640, 3), dtype=np.uint8)) == []
+
+
+def test_provider_upload_jpeg_respects_size_limit(tmp_path: Path) -> None:
+    service = configured_service(tmp_path)
+    image = np.random.default_rng(7).integers(0, 255, (900, 1200, 3), dtype=np.uint8)
+    import cv2
+
+    ok, encoded = cv2.imencode(".jpg", image)
+    assert ok
+    bounded = service.jpeg_within_limit(encoded.tobytes(), max_bytes=100_000)
+    assert len(bounded) <= 100_000

@@ -3,16 +3,16 @@
 FaceChain Verifier is a localhost-first pipeline that currently:
 
 1. detecting and encoding a face from an uploaded image,
-2. performs a genuine Google Web Detection reverse-image search, and
-3. confirms candidate images locally with SFace before showing their public pages.
+2. searches Google Web Detection and optional SerpAPI Google Lens exact and visual results, and
+3. confirms candidate and public-page preview images locally with SFace before showing their public pages.
 
-The blockchain proof stage is intentionally reserved for the next build. This version targets exact and near-duplicate images—such as crops, resizes, and light edits—not unrelated photos of the same person.
+The blockchain proof stage is intentionally reserved for the next build. Exact and near-duplicate images remain the most reliable results. The pipeline also evaluates Google's visually similar public images with SFace, allowing different photos of the selected person to appear when Google discovers them.
 
 ## Architecture
 
 - `app/`: FastAPI API, plain HTML/CSS/JavaScript frontend, and bundled YuNet/SFace models.
-- `app/services/face.py`: in-memory face detection, selection, alignment, and comparison.
-- `app/services/search.py`: Web Detection parsing, safe candidate retrieval, social URL classification, and ranking.
+- `app/services/face.py`: in-memory face detection, selection, alignment, multi-view query encoding, and comparison.
+- `app/services/search.py`: Google Vision and SerpAPI Google Lens discovery, safe candidate/page-preview retrieval, social URL classification, and ranking.
 - `compose.yaml`: starts the isolated application container; blockchain services are optional-profile placeholders for the next build.
 - `compose.google.yaml`: mounts the existing web-search credential read-only.
 - `blockchain/`: preserved Hardhat scaffold, not used by the current application workflow.
@@ -74,7 +74,23 @@ To run in the background instead:
 docker compose up --build -d
 ```
 
-### 4. Start with the web-search credential
+### 4. Configure SerpAPI Google Lens
+
+Add the ready API key to the ignored `.env` file; never add it to source code:
+
+```text
+SERPAPI_API_KEY=your-serpapi-key
+```
+
+Then start the app normally:
+
+```bash
+docker compose up --build app
+```
+
+The selected face crop is converted to JPEG and kept below SerpAPI's 500 KB upload limit. SerpAPI returns a temporary image identifier, which is used for one Google Lens request covering exact and visual matches. Lens candidates still have to pass local SFace verification. The complete uploaded photo is not sent to SerpAPI.
+
+### 5. Also enable Google Vision
 
 If you already have the credential JSON, save it as:
 
@@ -82,7 +98,7 @@ If you already have the credential JSON, save it as:
 secrets/google-credentials.json
 ```
 
-Then start the application with both Compose files:
+To combine Google Vision exact/partial matching with SerpAPI Google Lens discovery, start the application with both Compose files:
 
 ```bash
 docker compose \
@@ -93,7 +109,9 @@ docker compose \
 
 The credential is mounted read-only inside the application container. The `secrets/` directory is ignored by Git.
 
-### 5. Open and verify the application
+If one configured provider fails, the other provider can still return results.
+
+### 6. Open and verify the application
 
 Open the port selected in `.env`, for example:
 
@@ -121,7 +139,7 @@ The health response should be:
 {"status":"ok"}
 ```
 
-The status response reports application, face-model, and search-provider readiness without exposing credential data.
+The status response reports application, face-model, and per-provider configuration readiness without exposing credential data.
 
 ## API workflow
 
@@ -140,7 +158,7 @@ curl -X POST http://localhost:8000/api/search \
   -F 'face_index=0'
 ```
 
-`status: "matched"` means at least one result passed Google full/partial image matching, local SFace confirmation, and recognized social-post URL classification. Confirmed general web pages can be returned with `status: "no_match"` when no qualifying social post is present.
+`status: "matched"` means at least one result passed provider discovery, local SFace confirmation, and recognized social-post URL classification. Confirmed general web pages and direct visual-image matches can be returned with `status: "no_match"` when no qualifying social post is present. Each result identifies whether it came from Google Vision, SerpAPI Google Lens, or both. The summary distinguishes provider candidates from the number of candidate images actually inspected.
 
 ## View logs
 
@@ -177,6 +195,32 @@ The preserved blockchain scaffold can still be tested explicitly:
 ```bash
 make test-contract
 ```
+
+## Run the live acceptance check
+
+Use a public or consented image. The production code contains no expected URL; the command succeeds only when the live providers discover a result, SFace confirms it, and its URL matches a supported social-post format.
+
+```bash
+docker compose \
+  -f compose.yaml \
+  -f compose.google.yaml \
+  run --rm --no-deps \
+  -v /absolute/path/to/photo.jpg:/tmp/demo.jpg:ro \
+  app python -m scripts.live_acceptance /tmp/demo.jpg
+```
+
+For an image containing several people, repeat with the intended zero-based face index:
+
+```bash
+docker compose \
+  -f compose.yaml \
+  -f compose.google.yaml \
+  run --rm --no-deps \
+  -v /absolute/path/to/photo.jpg:/tmp/demo.jpg:ro \
+  app python -m scripts.live_acceptance /tmp/demo.jpg --face-index 1
+```
+
+Exit code `0` proves at least one live social-post match. Exit code `1` means the search completed without a confirmed social post; exit code `2` means the input needs attention.
 
 ## Stop or restart
 
@@ -256,7 +300,10 @@ docker compose --profile blockchain up --build
 
 ## Known limitations
 
-- Matching is designed for exact and near-duplicate images, not identity search across unrelated photos.
+- Cross-photo discovery uses Google Vision visual similarity and SerpAPI Google Lens; these are broader than duplicate matching but are not dedicated biometric identity-search engines.
+- SerpAPI receives only the selected face crop. Searching the complete photo or a wider crop could improve Lens recall, but would disclose more of the source image and is therefore not enabled implicitly.
+- Visual candidates receive local SFace confirmation but may link directly to an image because Google does not associate these results with a containing page.
+- Public result pages are inspected only as bounded HTML for Open Graph, Twitter Card, and JSON-LD preview images. JavaScript is never executed, so login-only or client-rendered media remains unavailable.
 - A successful hackathon result requires at least one locally confirmed URL whose hostname and path identify a social post.
 - Search quality depends on public indexing and direct access to a matching image URL.
 - Public social platforms may hide private, login-only, or unindexed posts.

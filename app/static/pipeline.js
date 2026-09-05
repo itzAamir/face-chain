@@ -28,10 +28,8 @@ function formatBytes(bytes) {
 }
 
 function updateContinueState() {
-  $("#continue-button").disabled = !(selectedFile && $("#consent-input").checked);
-  $("#selection-note").textContent = !selectedFile
-    ? "Select a photo and confirm permission"
-    : !$("#consent-input").checked ? "Confirm permission to continue" : "Ready to detect faces";
+  $("#continue-button").disabled = !selectedFile;
+  $("#selection-note").textContent = selectedFile ? "IMAGE LOADED" : "NO IMAGE SELECTED";
 }
 
 function clearSelection() {
@@ -44,7 +42,6 @@ function clearSelection() {
   $("#face-image").removeAttribute("src");
   $("#preview-card").hidden = true;
   $("#drop-zone").hidden = false;
-  $("#consent-input").checked = false;
   $("#file-error").hidden = true;
   updateContinueState();
 }
@@ -113,17 +110,17 @@ function renderFacePicker(faces) {
     overlay.append(button);
   });
   if (faces.length === 1) {
-    $("#face-picker-title").textContent = "Face detected";
-    $("#face-picker-copy").textContent = "The detected face is selected and ready to search.";
+    $("#face-picker-title").textContent = "1 face detected";
+    $("#face-picker-copy").textContent = "Detection 01 selected.";
     chooseFace(faces[0].index);
   } else {
-    $("#face-picker-title").textContent = "Choose the face to search";
-    $("#face-picker-copy").textContent = `${faces.length} faces detected. Select one to continue.`;
+    $("#face-picker-title").textContent = `${faces.length} faces detected`;
+    $("#face-picker-copy").textContent = "Select a detection.";
     $("#search-button").disabled = true;
   }
 }
 
-function showPipelineError(error, title = "We could not complete the search") {
+function showPipelineError(error, title = "Search failed") {
   $("#error-title").textContent = title;
   $("#error-message").textContent = error.message || "Try again with another image.";
   $("#retry-button").hidden = error.code === "no_face_detected";
@@ -131,7 +128,7 @@ function showPipelineError(error, title = "We could not complete the search") {
 }
 
 async function detectFaces() {
-  if (!selectedFile || !$("#consent-input").checked) return;
+  if (!selectedFile) return;
   const button = $("#continue-button");
   button.disabled = true;
   button.textContent = "Detecting…";
@@ -145,7 +142,7 @@ async function detectFaces() {
   } catch (error) {
     showPipelineError(error, error.code === "no_face_detected" ? "No face detected" : undefined);
   } finally {
-    button.textContent = "Detect faces";
+    button.textContent = "Detect";
     updateContinueState();
   }
 }
@@ -161,17 +158,24 @@ function buildResultCard(result) {
   body.className = "result-body";
   const eyebrow = document.createElement("span");
   eyebrow.className = "result-eyebrow";
-  eyebrow.textContent = `${result.source_kind === "social_post" ? "Social post" : "Web page"} · ${result.platform}`;
+  const sourceLabel = result.source_kind === "social_post"
+    ? "Social post" : result.source_kind === "web_image" ? "Public image" : "Web page";
+  eyebrow.textContent = `${sourceLabel} · ${result.platform}`;
   const title = document.createElement("h3");
   title.textContent = result.page_title;
   const details = document.createElement("p");
-  details.textContent = `${result.provider_match_type === "full" ? "Full" : "Partial"} image match · Face similarity ${Number(result.face_similarity).toFixed(3)}`;
+  const matchLabel = result.provider_match_type === "full"
+    ? "Full image match"
+    : result.provider_match_type === "partial" ? "Partial image match" : "Visual face match";
+  const providerLabel = result.discovery_provider?.includes("serpapi") ? "Google Lens" : "Google Vision";
+  details.textContent = `${matchLabel} · Face similarity ${Number(result.face_similarity).toFixed(3)} · ${providerLabel}`;
   const link = document.createElement("a");
   link.className = "result-link";
   link.href = result.page_url;
   link.target = "_blank";
   link.rel = "noopener noreferrer";
-  link.textContent = result.source_kind === "social_post" ? "Open post" : "Open page";
+  link.textContent = result.source_kind === "social_post"
+    ? "Open post" : result.source_kind === "web_image" ? "Open image" : "Open page";
   body.append(eyebrow, title, details, link);
   article.append(thumbnail, body);
   return article;
@@ -181,16 +185,16 @@ function renderResults(payload) {
   $("#results-list").replaceChildren(...payload.results.map(buildResultCard));
   const social = payload.summary.confirmed_social_posts;
   const total = payload.summary.confirmed_results;
+  const candidates = payload.summary.candidates_examined;
+  const images = payload.summary.candidate_images_examined ?? candidates;
   if (payload.status === "matched") {
-    $("#results-title").textContent = "Confirmed social match found";
-    $("#results-summary").textContent = `${social} social post${social === 1 ? "" : "s"} confirmed from ${payload.summary.candidates_examined} candidate images.`;
+    $("#results-title").textContent = "Social match";
   } else if (total > 0) {
-    $("#results-title").textContent = "No confirmed social post";
-    $("#results-summary").textContent = `${total} confirmed web match${total === 1 ? "" : "es"} found, but none is a recognized social-post URL.`;
+    $("#results-title").textContent = "Web matches only";
   } else {
-    $("#results-title").textContent = "No confirmed match found";
-    $("#results-summary").textContent = "No downloadable result passed local face confirmation.";
+    $("#results-title").textContent = "No match";
   }
+  $("#results-summary").textContent = `${social} social · ${total} confirmed · ${candidates} candidates · ${images} images checked`;
   setView("results");
 }
 
@@ -215,7 +219,6 @@ $("#face-input").addEventListener("change", () => {
   const [file] = $("#face-input").files;
   if (file) selectFile(file);
 });
-$("#consent-input").addEventListener("change", updateContinueState);
 ["dragenter", "dragover"].forEach((name) => $("#drop-zone").addEventListener(name, (event) => {
   event.preventDefault(); $("#drop-zone").classList.add("dragging");
 }));
@@ -234,18 +237,30 @@ $("#error-new-search-button").addEventListener("click", startOver);
 $("#retry-button").addEventListener("click", () => selectedFaceIndex === null ? detectFaces() : runSearch());
 
 async function checkStatus() {
+  const setRuntime = (selector, ready, readyLabel = "READY") => {
+    const element = $(selector);
+    element.textContent = ready ? readyLabel : "OFFLINE";
+    element.classList.toggle("ready", ready);
+    element.classList.toggle("offline", !ready);
+  };
   try {
     const response = await fetch("/api/status", { headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error();
     const status = await response.json();
+    setRuntime("#models-status", status.face_pipeline === "ready");
+    setRuntime("#vision-status", status.search_providers?.google_web_detection === "configured");
+    setRuntime("#lens-status", status.search_providers?.serpapi_google_lens === "configured");
     if (status.face_pipeline === "ready" && status.web_search === "ready") {
-      $("#status-dot").className = "status-dot ready"; $("#status-label").textContent = "Search ready";
+      $("#status-dot").className = "status-dot ready"; $("#status-label").textContent = "Runtime ready";
     } else if (status.face_pipeline !== "ready") {
       $("#status-dot").className = "status-dot error"; $("#status-label").textContent = "Face models missing";
     } else {
       $("#status-dot").className = "status-dot pending"; $("#status-label").textContent = "Search credentials needed";
     }
   } catch {
+    setRuntime("#models-status", false);
+    setRuntime("#vision-status", false);
+    setRuntime("#lens-status", false);
     $("#status-dot").className = "status-dot error"; $("#status-label").textContent = "Offline";
   }
 }

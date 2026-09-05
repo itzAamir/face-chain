@@ -60,11 +60,16 @@ def health() -> dict[str, str]:
 @app.get("/api/status")
 def status() -> dict[str, object]:
     credential_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    provider_configured = bool(credential_path and Path(credential_path).is_file())
+    google_configured = bool(credential_path and Path(credential_path).is_file())
+    serpapi_configured = bool(settings.serpapi_api_key)
     return {
         "application": "ready",
         "face_pipeline": "ready" if face_service.models_ready else "models_missing",
-        "web_search": "ready" if provider_configured else "credentials_missing",
+        "web_search": "ready" if google_configured or serpapi_configured else "credentials_missing",
+        "search_providers": {
+            "google_web_detection": "configured" if google_configured else "not_configured",
+            "serpapi_google_lens": "configured" if serpapi_configured else "not_configured",
+        },
         "blockchain": "next_build",
     }
 

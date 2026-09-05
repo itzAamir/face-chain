@@ -3,57 +3,65 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Find confirmed copies of a face photo on public web and social pages." />
-    <title>FaceChain</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <meta name="description" content="Local face search prototype." />
+    <title>FaceChain Prototype</title>
+    <link rel="stylesheet" href="/static/styles.css?v=prototype-1" />
   </head>
   <body>
     <header class="app-header">
       <a class="brand" href="/" aria-label="FaceChain home">
         <span class="brand-mark" aria-hidden="true"></span>
-        FaceChain
+        FaceChain <span class="prototype-tag">prototype</span>
       </a>
       <div class="system-status" aria-live="polite">
         <span id="status-dot" class="status-dot pending" aria-hidden="true"></span>
-        <span id="status-label">Checking services</span>
+        <span id="status-label">Booting</span>
       </div>
     </header>
 
     <main class="page-shell">
       <header class="page-intro">
-        <h1>Find a public copy of a face photo.</h1>
-        <p class="intro-copy">Search exact, cropped, resized, or lightly edited versions—not unrelated photos of the same person.</p>
+        <div>
+          <span class="kicker">LOCAL / FACE SEARCH</span>
+          <h1>Search prototype</h1>
+        </div>
+        <code>POST /api/search</code>
       </header>
+
+      <div class="runtime-grid" aria-label="Runtime status">
+        <div><span>FACE MODELS</span><strong id="models-status">CHECKING</strong></div>
+        <div><span>GOOGLE VISION</span><strong id="vision-status">CHECKING</strong></div>
+        <div><span>GOOGLE LENS</span><strong id="lens-status">CHECKING</strong></div>
+      </div>
 
       <ol class="steps" aria-label="Verification progress">
         <li class="step active" data-step="1" aria-current="step">
           <span class="step-number">1</span>
           <span class="step-copy">
-            <strong>Upload &amp; select</strong>
-            <small>Choose the face</small>
+            <strong>Input</strong>
+            <small>Image + face</small>
           </span>
         </li>
         <li class="step" data-step="2">
           <span class="step-number">2</span>
           <span class="step-copy">
             <strong>Search</strong>
-            <small>Confirm public matches</small>
+            <small>Discover + verify</small>
           </span>
         </li>
         <li class="step disabled" data-step="3" aria-disabled="true">
           <span class="step-number">3</span>
           <span class="step-copy">
-            <strong>Blockchain proof</strong>
-            <small>Next build</small>
+            <strong>Proof</strong>
+            <small>Not connected</small>
           </span>
         </li>
       </ol>
 
       <section class="workspace" aria-labelledby="upload-title">
         <div class="workspace-heading">
-          <span class="step-label">Step 1 of 2</span>
-          <h2 id="upload-title">Upload a face photo</h2>
-          <p>Use a clear public image that you have permission to search.</p>
+          <span class="step-label">INPUT / 01</span>
+          <h2 id="upload-title">Image</h2>
         </div>
 
         <div id="upload-view">
@@ -68,9 +76,8 @@
                 <path d="M12 16V4m0 0 4 4m-4-4L8 8M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" />
               </svg>
             </span>
-            <strong>Choose a photo</strong>
-            <span>or drop it here</span>
-            <small>JPG, PNG or WebP · 10 MB max</small>
+            <strong>Drop image or browse</strong>
+            <small>JPG / PNG / WEBP · MAX 10 MB</small>
           </label>
 
           <p id="file-error" class="file-error" role="alert" hidden></p>
@@ -84,15 +91,10 @@
             <button id="remove-file" class="text-button" type="button">Remove</button>
           </div>
 
-          <label class="consent-row">
-            <input id="consent-input" type="checkbox" />
-            <span>I have permission to search this image and understand it will be sent to the configured search provider.</span>
-          </label>
-
           <div class="workspace-actions">
-            <span id="selection-note" class="selection-note">Select a photo and confirm permission</span>
+            <span id="selection-note" class="selection-note">NO IMAGE SELECTED</span>
             <button id="continue-button" class="primary-button" type="button" disabled>
-              Detect faces
+              Detect
               <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
                 <path d="M4 10h12m0 0-5-5m5 5-5 5" />
               </svg>
@@ -102,103 +104,52 @@
 
         <div id="face-view" hidden>
           <div class="workspace-heading inline-heading">
-            <span class="step-label">Select a face</span>
-            <h2 id="face-picker-title">Choose the face to search</h2>
-            <p id="face-picker-copy">Select one detected face in the image.</p>
+            <span class="step-label">INPUT / FACE</span>
+            <h2 id="face-picker-title">Select face</h2>
+            <p id="face-picker-copy">Choose a detection.</p>
           </div>
           <div id="face-canvas" class="face-canvas">
             <img id="face-image" alt="Uploaded photo with detected face choices" />
             <div id="face-overlay" class="face-overlay"></div>
           </div>
           <div class="workspace-actions">
-            <button id="change-photo-button" class="secondary-button" type="button">Change photo</button>
-            <button id="search-button" class="primary-button" type="button" disabled>Search this face</button>
+            <button id="change-photo-button" class="secondary-button" type="button">Back</button>
+            <button id="search-button" class="primary-button" type="button" disabled>Run search</button>
           </div>
         </div>
 
         <div id="search-view" class="search-view" hidden>
           <span class="spinner" aria-hidden="true"></span>
-          <span class="step-label">Step 2 of 2</span>
-          <h2>Searching public sources</h2>
-          <p>Checking genuine reverse-image results and confirming the selected face locally.</p>
+          <span class="step-label">SEARCH / RUNNING</span>
+          <h2>Querying providers</h2>
+          <p>Vision + Lens → SFace verification</p>
         </div>
 
         <div id="results-view" hidden>
           <div class="results-heading">
             <div>
-              <span class="step-label">Step 2 of 2</span>
-              <h2 id="results-title">Confirmed matches</h2>
+              <span class="step-label">SEARCH / OUTPUT</span>
+              <h2 id="results-title">Results</h2>
               <p id="results-summary"></p>
             </div>
-            <button id="new-search-button" class="secondary-button" type="button">New search</button>
+            <button id="new-search-button" class="secondary-button" type="button">Reset</button>
           </div>
           <div id="results-list" class="results-list"></div>
-          <div class="next-build-note">
-            <strong>Blockchain proof</strong>
-            <span>Evidence recording and reverification will be added in the next build.</span>
-          </div>
         </div>
 
         <div id="error-view" class="error-view" hidden>
           <span class="error-mark" aria-hidden="true">!</span>
-          <span class="step-label">Search stopped</span>
-          <h2 id="error-title">We could not complete the search</h2>
+          <span class="step-label">SEARCH / ERROR</span>
+          <h2 id="error-title">Search failed</h2>
           <p id="error-message"></p>
           <div class="error-actions">
-            <button id="retry-button" class="primary-button" type="button">Try again</button>
-            <button id="error-new-search-button" class="secondary-button" type="button">Choose another photo</button>
-          </div>
-        </div>
-
-        <div id="proof-view" class="proof-view" hidden>
-          <div class="proof-heading">
-            <span class="proof-check" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none">
-                <path d="m6 12 4 4 8-9" />
-              </svg>
-            </span>
-            <div>
-              <span class="step-label">Step 3 of 3</span>
-              <h2>Evidence verified</h2>
-              <p>Matches the on-chain record.</p>
-            </div>
-          </div>
-
-          <dl class="proof-summary">
-            <div>
-              <dt>Recorded</dt>
-              <dd id="proof-recorded">—</dd>
-            </div>
-            <div>
-              <dt>Block</dt>
-              <dd id="proof-block">—</dd>
-            </div>
-            <div>
-              <dt>Fingerprint</dt>
-              <dd id="proof-fingerprint">—</dd>
-            </div>
-          </dl>
-
-          <div class="proof-actions">
-            <button id="reverify-button" class="secondary-button" type="button">Reverify</button>
-            <details class="proof-details">
-              <summary>View details</summary>
-              <dl>
-                <div>
-                  <dt>Evidence hash</dt>
-                  <dd id="proof-hash">—</dd>
-                </div>
-                <div>
-                  <dt>Transaction</dt>
-                  <dd id="proof-transaction">—</dd>
-                </div>
-              </dl>
-            </details>
+            <button id="retry-button" class="primary-button" type="button">Retry</button>
+            <button id="error-new-search-button" class="secondary-button" type="button">Reset</button>
           </div>
         </div>
       </section>
     </main>
 
-    <script src="/static/pipeline.js" defer></script>
+    <script src="/static/pipeline.js?v=prototype-1" defer></script>
   </body>
 </html>

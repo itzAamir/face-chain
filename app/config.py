@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -21,14 +21,24 @@ class Settings:
     max_upload_bytes: int = _int_env("MAX_UPLOAD_BYTES", 10 * 1024 * 1024)
     max_image_pixels: int = _int_env("MAX_IMAGE_PIXELS", 24_000_000)
     face_detection_threshold: float = _float_env("FACE_DETECTION_THRESHOLD", 0.9)
+    candidate_face_detection_threshold: float = _float_env(
+        "CANDIDATE_FACE_DETECTION_THRESHOLD", 0.65
+    )
     face_match_threshold: float = _float_env("FACE_MATCH_THRESHOLD", 0.363)
-    candidate_limit: int = _int_env("SEARCH_CANDIDATE_LIMIT", 20)
+    candidate_limit: int = _int_env("SEARCH_CANDIDATE_LIMIT", 80)
     result_limit: int = _int_env("SEARCH_RESULT_LIMIT", 5)
+    per_page_image_limit: int = _int_env("SEARCH_IMAGES_PER_PAGE", 4)
+    max_page_bytes: int = _int_env("MAX_CANDIDATE_PAGE_BYTES", 2 * 1024 * 1024)
     provider_timeout_seconds: float = _float_env("SEARCH_PROVIDER_TIMEOUT_SECONDS", 25.0)
     download_timeout_seconds: float = _float_env("CANDIDATE_DOWNLOAD_TIMEOUT_SECONDS", 10.0)
     max_candidate_bytes: int = _int_env("MAX_CANDIDATE_BYTES", 10 * 1024 * 1024)
     download_concurrency: int = _int_env("CANDIDATE_DOWNLOAD_CONCURRENCY", 4)
     max_redirects: int = _int_env("CANDIDATE_MAX_REDIRECTS", 3)
+    serpapi_timeout_seconds: float = _float_env("SERPAPI_TIMEOUT_SECONDS", 45.0)
+    serpapi_api_key: str | None = field(
+        default=os.getenv("SERPAPI_API_KEY") or None,
+        repr=False,
+    )
     yunet_model: Path = Path(
         os.getenv(
             "YUNET_MODEL_PATH",

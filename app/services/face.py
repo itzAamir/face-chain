@@ -117,12 +117,21 @@ class FaceService:
             raise InvalidImageError("The decoded image dimensions are too large.")
         return image
 
-    def detect(self, image: np.ndarray) -> list[DetectedFace]:
+    def detect(
+        self, image: np.ndarray, score_threshold: float | None = None
+    ) -> list[DetectedFace]:
         detector, _ = self._load_models()
         height, width = image.shape[:2]
         with self._lock:
             detector.setInputSize((width, height))
-            _, raw_faces = detector.detect(image)
+            can_set_threshold = hasattr(detector, "setScoreThreshold")
+            if score_threshold is not None and can_set_threshold:
+                detector.setScoreThreshold(score_threshold)
+            try:
+                _, raw_faces = detector.detect(image)
+            finally:
+                if score_threshold is not None and can_set_threshold:
+                    detector.setScoreThreshold(self.settings.face_detection_threshold)
         if raw_faces is None or len(raw_faces) == 0:
             return []
         ordered = sorted(raw_faces, key=lambda face: (float(face[1]), float(face[0])))
@@ -155,14 +164,57 @@ class FaceService:
             raise FacePipelineError("The selected face could not be encoded.")
         return vector / norm
 
-    def best_similarity(self, image_bytes: bytes, query_embedding: np.ndarray) -> float | None:
+    @staticmethod
+    def _normalize_feature(feature: np.ndarray) -> np.ndarray:
+        vector = np.asarray(feature, dtype=np.float32).reshape(-1)
+        norm = float(np.linalg.norm(vector))
+        if norm == 0:
+            raise FacePipelineError("The selected face could not be encoded.")
+        return vector / norm
+
+    def embedding_variants(self, image: np.ndarray, face: DetectedFace) -> np.ndarray:
+        """Create a small query gallery resilient to lighting and mirroring."""
+        _, recognizer = self._load_models()
+        with self._lock:
+            aligned = recognizer.alignCrop(image, face.raw)
+            lab = cv2.cvtColor(aligned, cv2.COLOR_BGR2LAB)
+            lightness, channel_a, channel_b = cv2.split(lab)
+            equalized = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4)).apply(lightness)
+            normalized_light = cv2.cvtColor(
+                cv2.merge((equalized, channel_a, channel_b)), cv2.COLOR_LAB2BGR
+            )
+            variants = (aligned, cv2.flip(aligned, 1), normalized_light)
+            features = [self._normalize_feature(recognizer.feature(item)) for item in variants]
+        return np.stack(features)
+
+    def best_similarity(
+        self, image_bytes: bytes, query_embeddings: np.ndarray
+    ) -> float | None:
         try:
-            image, faces = self.detect_bytes(image_bytes)
+            image = self.decode(image_bytes)
+            # Provider thumbnails are commonly small. Upscaling improves YuNet's
+            # recall while the lower score threshold is used only for candidates.
+            height, width = image.shape[:2]
+            if min(height, width) < 480:
+                scale = min(3.0, 480.0 / min(height, width))
+                image = cv2.resize(
+                    image,
+                    (max(1, int(width * scale)), max(1, int(height * scale))),
+                    interpolation=cv2.INTER_CUBIC,
+                )
+            faces = self.detect(
+                image, score_threshold=self.settings.candidate_face_detection_threshold
+            )
         except FacePipelineError:
             return None
         if not faces:
             return None
-        scores = [float(np.dot(query_embedding, self.embedding(image, face))) for face in faces]
+        gallery = np.asarray(query_embeddings, dtype=np.float32)
+        if gallery.ndim == 1:
+            gallery = gallery.reshape(1, -1)
+        scores = [
+            float(np.max(gallery @ self.embedding(image, face))) for face in faces
+        ]
         return max(scores, default=None)
 
     def crop(self, image: np.ndarray, face: DetectedFace, margin: float = 0.25) -> bytes:
@@ -194,3 +246,31 @@ class FaceService:
             raise InvalidImageError("A candidate thumbnail could not be created.")
         value = base64.b64encode(encoded.tobytes()).decode("ascii")
         return f"data:image/jpeg;base64,{value}"
+
+    def jpeg_within_limit(
+        self, image_bytes: bytes, max_bytes: int = 500 * 1024, max_side: int = 1024
+    ) -> bytes:
+        """Convert an image to a bounded JPEG for providers with upload limits."""
+        image = self.decode(image_bytes)
+        height, width = image.shape[:2]
+        initial_scale = min(1.0, max_side / max(height, width))
+        if initial_scale < 1.0:
+            image = cv2.resize(
+                image,
+                (max(1, int(width * initial_scale)), max(1, int(height * initial_scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        for _ in range(5):
+            for quality in (88, 78, 68, 58):
+                ok, encoded = cv2.imencode(
+                    ".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, quality]
+                )
+                if ok and len(encoded) <= max_bytes:
+                    return encoded.tobytes()
+            new_width = max(96, int(image.shape[1] * 0.75))
+            new_height = max(96, int(image.shape[0] * 0.75))
+            if (new_width, new_height) == (image.shape[1], image.shape[0]):
+                break
+            image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
+        raise FacePipelineError("The selected face crop could not fit the search upload limit.")

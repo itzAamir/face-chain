@@ -15,4 +15,5 @@ def test_health() -> None:
 def test_index() -> None:
     response = client.get("/")
     assert response.status_code == 200
-    assert "<title>FaceChain</title>" in response.text
+    assert "<title>FaceChain Prototype</title>" in response.text
+    assert 'id="consent-input"' not in response.text
