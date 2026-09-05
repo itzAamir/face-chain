@@ -1,0 +1,8 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+python-multipart==0.0.20
+httpx==0.28.1
+google-cloud-vision==3.10.2
+opencv-python-headless==4.12.0.88
+numpy==2.2.6
+pytest==8.4.1

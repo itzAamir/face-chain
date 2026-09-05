@@ -1,0 +1,64 @@
+name: facechain-verifier
+
+services:
+  blockchain:
+    profiles: ["blockchain"]
+    build:
+      context: ./blockchain
+    command: npm run node
+    expose:
+      - "8545"
+    healthcheck:
+      test: ["CMD", "node", "scripts/check-rpc.js"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    networks:
+      - private
+    security_opt:
+      - no-new-privileges:true
+
+  deployer:
+    profiles: ["blockchain"]
+    build:
+      context: ./blockchain
+    command: npm run deploy:local
+    environment:
+      BLOCKCHAIN_RPC_URL: http://blockchain:8545
+      DEPLOYMENT_OUTPUT: /deployment/contract.json
+    volumes:
+      - deployment-data:/deployment
+    depends_on:
+      blockchain:
+        condition: service_healthy
+    networks:
+      - private
+    security_opt:
+      - no-new-privileges:true
+
+  app:
+    build:
+      context: ./app
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      FACE_DETECTION_THRESHOLD: ${FACE_DETECTION_THRESHOLD:-0.9}
+      FACE_MATCH_THRESHOLD: ${FACE_MATCH_THRESHOLD:-0.363}
+      MAX_IMAGE_PIXELS: ${MAX_IMAGE_PIXELS:-24000000}
+      SEARCH_CANDIDATE_LIMIT: ${SEARCH_CANDIDATE_LIMIT:-20}
+      SEARCH_RESULT_LIMIT: ${SEARCH_RESULT_LIMIT:-5}
+      SEARCH_PROVIDER_TIMEOUT_SECONDS: ${SEARCH_PROVIDER_TIMEOUT_SECONDS:-25}
+      CANDIDATE_DOWNLOAD_TIMEOUT_SECONDS: ${CANDIDATE_DOWNLOAD_TIMEOUT_SECONDS:-10}
+    networks:
+      - private
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  private:
+    driver: bridge
+
+volumes:
+  deployment-data:

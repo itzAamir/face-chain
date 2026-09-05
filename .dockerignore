@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env
+.venv
+**/__pycache__
+**/.pytest_cache
+**/node_modules
+blockchain/artifacts
+blockchain/cache
+blockchain/deployments
+secrets
+data/evidence/*
+
