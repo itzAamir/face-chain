@@ -41,10 +41,11 @@ def test_search_returns_service_result(monkeypatch) -> None:
     async def fake_search(*_) -> dict[str, object]:
         return {
             "status": "no_match",
-            "provider": "google_web_detection",
+            "providers": ["google_web_detection"],
             "query_face": {"index": 0},
             "summary": {
                 "candidates_examined": 0,
+                "candidate_images_examined": 0,
                 "confirmed_results": 0,
                 "confirmed_social_posts": 0,
             },
@@ -91,3 +92,115 @@ def test_search_maps_provider_failures(monkeypatch) -> None:
         response = client.post("/api/search", files=IMAGE_UPLOAD, data={"face_index": "0"})
         assert response.status_code == status_code
         assert response.json()["detail"]["code"] == code
+
+
+def test_status_reports_the_chain(monkeypatch) -> None:
+    async def fake_status() -> dict[str, object]:
+        return {"state": "ready", "chain_id": 31337, "contract_address": "0xabc"}
+
+    monkeypatch.setattr(main.blockchain_service, "status", fake_status)
+    body = client.get("/api/status").json()
+    assert body["blockchain"]["state"] == "ready"
+    assert body["blockchain"]["chain_id"] == 31337
+    assert body["attestation"] in {"enabled", "disabled"}
+
+
+def test_verify_requires_something_to_check() -> None:
+    response = client.post("/api/verify")
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "nothing_to_verify"
+
+
+def test_verify_rejects_a_malformed_digest() -> None:
+    response = client.post("/api/verify", data={"digest": "not-a-digest"})
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_digest"
+
+
+def test_verify_rejects_a_non_json_upload() -> None:
+    response = client.post(
+        "/api/verify",
+        files={"record": ("record.json", io.BytesIO(b"not json"), "application/json")},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_record"
+
+
+def test_verify_returns_200_for_a_verified_record(monkeypatch) -> None:
+    async def fake_verify(bundle, refetch=False) -> dict[str, object]:
+        assert refetch is True
+        return {"status": "verified", "record_digest": "0x" + "ab" * 32}
+
+    monkeypatch.setattr(main.evidence_service, "verify_bundle", fake_verify)
+    response = client.post(
+        "/api/verify",
+        files={"record": ("record.json", io.BytesIO(b'{"post": {}}'), "application/json")},
+        data={"refetch": "true"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "verified"
+
+
+def test_verify_returns_422_for_a_tampered_record(monkeypatch) -> None:
+    """A failed verification must not read as success to a status-code check."""
+
+    async def fake_verify(bundle, refetch=False) -> dict[str, object]:
+        return {"status": "digest_mismatch", "reason": "modified"}
+
+    monkeypatch.setattr(main.evidence_service, "verify_bundle", fake_verify)
+    response = client.post(
+        "/api/verify",
+        files={"record": ("record.json", io.BytesIO(b'{"post": {}}'), "application/json")},
+    )
+    assert response.status_code == 422
+    assert response.json()["status"] == "digest_mismatch"
+
+
+def test_verify_by_digest(monkeypatch) -> None:
+    async def fake_verify_digest(digest: str) -> dict[str, object]:
+        return {"status": "not_attested", "record_digest": digest}
+
+    monkeypatch.setattr(main.evidence_service, "verify_digest", fake_verify_digest)
+    response = client.post("/api/verify", data={"digest": "ab" * 32})
+    assert response.status_code == 200
+    assert response.json()["record_digest"] == "0x" + "ab" * 32
+
+
+def test_evidence_returns_a_stored_record(monkeypatch) -> None:
+    bundle = {"record": {"post": {}}, "proof": {"state": "attested"}}
+    monkeypatch.setattr(main.evidence_service, "load_record", lambda digest: bundle)
+    response = client.get("/api/evidence/0x" + "ab" * 32)
+    assert response.status_code == 200
+    assert response.json() == bundle
+
+
+def test_evidence_reports_a_missing_record(monkeypatch) -> None:
+    monkeypatch.setattr(main.evidence_service, "load_record", lambda digest: None)
+    response = client.get("/api/evidence/0x" + "ab" * 32)
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "evidence_not_found"
+
+
+def test_evidence_rejects_a_malformed_digest() -> None:
+    response = client.get("/api/evidence/nope")
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_digest"
+
+
+def test_search_attaches_proofs(monkeypatch) -> None:
+    """The search route must run the anchoring stage, not just discovery."""
+    monkeypatch.setattr(main.face_service, "detect_bytes", fake_detect)
+
+    async def fake_search(*_) -> dict[str, object]:
+        return {"status": "matched", "results": [{"page_url": "https://x/1"}]}
+
+    async def fake_attest(payload, *, query_image, face_index) -> dict[str, object]:
+        assert query_image == b"fake-image" and face_index == 0
+        payload["results"][0]["proof"] = {"state": "attested"}
+        return payload
+
+    monkeypatch.setattr(main.search_service, "search", fake_search)
+    monkeypatch.setattr(main.evidence_service, "attest_results", fake_attest)
+    response = client.post("/api/search", files=IMAGE_UPLOAD, data={"face_index": "0"})
+    assert response.status_code == 200
+    assert response.json()["results"][0]["proof"]["state"] == "attested"

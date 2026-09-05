@@ -1,0 +1,60 @@
+# Blockchain overlay.
+#
+# Adds the local EvidenceRegistry chain and wires the app to it. These services
+# carry no Compose profile: the overlay itself is the opt-in, mirroring the way
+# compose.google.yaml opts in to the Vision credential.
+#
+#   docker compose -f compose.yaml -f compose.blockchain.yaml up --build
+
+services:
+  blockchain:
+    build:
+      context: ./blockchain
+    command: npm run node
+    expose:
+      - "8545"
+    healthcheck:
+      test: ["CMD", "node", "scripts/check-rpc.js"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    networks:
+      - private
+    security_opt:
+      - no-new-privileges:true
+
+  deployer:
+    build:
+      context: ./blockchain
+    command: npm run deploy:local
+    environment:
+      BLOCKCHAIN_RPC_URL: http://blockchain:8545
+      DEPLOYMENT_OUTPUT: /deployment/contract.json
+    volumes:
+      - deployment-data:/deployment
+    depends_on:
+      blockchain:
+        condition: service_healthy
+    networks:
+      - private
+    security_opt:
+      - no-new-privileges:true
+
+  app:
+    environment:
+      BLOCKCHAIN_RPC_URL: http://blockchain:8545
+      CONTRACT_DEPLOYMENT_FILE: /deployment/contract.json
+      EVIDENCE_DIR: /data/evidence
+      EVIDENCE_ATTEST: ${EVIDENCE_ATTEST:-true}
+    volumes:
+      # The deployment artifact is produced by deployer and only read here.
+      - deployment-data:/deployment:ro
+      # Bound to the host so attested records stay inspectable after a run.
+      - ./data/evidence:/data/evidence
+    depends_on:
+      deployer:
+        condition: service_completed_successfully
+
+volumes:
+  deployment-data:

@@ -16,6 +16,10 @@ def _float_env(name: str, default: float) -> float:
     return float(os.getenv(name, str(default)))
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     max_upload_bytes: int = _int_env("MAX_UPLOAD_BYTES", 10 * 1024 * 1024)
@@ -35,6 +39,22 @@ class Settings:
     download_concurrency: int = _int_env("CANDIDATE_DOWNLOAD_CONCURRENCY", 4)
     max_redirects: int = _int_env("CANDIDATE_MAX_REDIRECTS", 3)
     serpapi_timeout_seconds: float = _float_env("SERPAPI_TIMEOUT_SECONDS", 45.0)
+    blockchain_rpc_url: str = os.getenv("BLOCKCHAIN_RPC_URL", "http://blockchain:8545")
+    contract_deployment_file: Path = Path(
+        os.getenv("CONTRACT_DEPLOYMENT_FILE", "/deployment/contract.json")
+    )
+    attester_address: str | None = os.getenv("ATTESTER_ADDRESS") or None
+    blockchain_timeout_seconds: float = _float_env("BLOCKCHAIN_TIMEOUT_SECONDS", 10.0)
+    blockchain_receipt_attempts: int = _int_env("BLOCKCHAIN_RECEIPT_ATTEMPTS", 20)
+    blockchain_receipt_interval_seconds: float = _float_env(
+        "BLOCKCHAIN_RECEIPT_INTERVAL_SECONDS", 0.25
+    )
+    evidence_dir: Path = Path(os.getenv("EVIDENCE_DIR", "/data/evidence"))
+    evidence_attest: bool = _bool_env("EVIDENCE_ATTEST", False)
+    # Retains the exact bytes that were hashed, so a deleted post can still be
+    # re-verified. Off by default: it is the only part of the pipeline that
+    # persists image data.
+    evidence_store_images: bool = _bool_env("EVIDENCE_STORE_IMAGES", False)
     serpapi_api_key: str | None = field(
         default=os.getenv("SERPAPI_API_KEY") or None,
         repr=False,

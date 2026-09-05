@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="Local face search prototype." />
     <title>FaceChain Prototype</title>
-    <link rel="stylesheet" href="/static/styles.css?v=prototype-1" />
+    <link rel="stylesheet" href="/static/styles.css?v=proof-1" />
   </head>
   <body>
     <header class="app-header">
@@ -32,6 +32,7 @@
         <div><span>FACE MODELS</span><strong id="models-status">CHECKING</strong></div>
         <div><span>GOOGLE VISION</span><strong id="vision-status">CHECKING</strong></div>
         <div><span>GOOGLE LENS</span><strong id="lens-status">CHECKING</strong></div>
+        <div><span>CHAIN</span><strong id="chain-status">CHECKING</strong></div>
       </div>
 
       <ol class="steps" aria-label="Verification progress">
@@ -49,11 +50,11 @@
             <small>Discover + verify</small>
           </span>
         </li>
-        <li class="step disabled" data-step="3" aria-disabled="true">
+        <li class="step" data-step="3">
           <span class="step-number">3</span>
           <span class="step-copy">
             <strong>Proof</strong>
-            <small>Not connected</small>
+            <small>Anchor + re-verify</small>
           </span>
         </li>
       </ol>
@@ -135,6 +136,27 @@
             <button id="new-search-button" class="secondary-button" type="button">Reset</button>
           </div>
           <div id="results-list" class="results-list"></div>
+
+          <div class="verify-panel">
+            <div class="workspace-heading inline-heading">
+              <span class="step-label">PROOF / RE-VERIFY</span>
+              <h3>Check a record</h3>
+              <p>
+                Drop an evidence record to re-derive its digest and look it up on
+                chain. Nothing here trusts the file's own proof block.
+              </p>
+            </div>
+            <label id="verify-zone" class="drop-zone compact" for="verify-input">
+              <input id="verify-input" type="file" accept="application/json,.json" />
+              <strong>Drop record or browse</strong>
+              <small>JSON · FROM data/evidence/</small>
+            </label>
+            <label class="verify-option">
+              <input id="verify-refetch" type="checkbox" />
+              <span>Re-download the post image and compare it with the attested bytes</span>
+            </label>
+            <div id="verify-output" class="verify-output" role="status" hidden></div>
+          </div>
         </div>
 
         <div id="error-view" class="error-view" hidden>
@@ -150,6 +172,6 @@
       </section>
     </main>
 
-    <script src="/static/pipeline.js?v=prototype-1" defer></script>
+    <script src="/static/pipeline.js?v=proof-1" defer></script>
   </body>
 </html>

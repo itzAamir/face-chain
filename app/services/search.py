@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import ipaddress
 import json
@@ -41,15 +42,28 @@ class CandidatePage:
     discovery_providers: set[str] = field(default_factory=set)
 
 
+@dataclass
+class PageMetadata:
+    """Public preview data lifted from a candidate page."""
+
+    images: list[str] = field(default_factory=list)
+    title: str | None = None
+    description: str | None = None
+
+
 class PageImageParser(HTMLParser):
-    """Collect public preview images without executing page scripts."""
+    """Collect public preview images and text without executing page scripts."""
 
     META_KEYS = {"og:image", "og:image:url", "twitter:image", "twitter:image:src"}
+    TITLE_KEYS = ("og:title", "twitter:title")
+    DESCRIPTION_KEYS = ("og:description", "twitter:description")
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.images: list[str] = []
         self.json_ld: list[str] = []
+        self.titles: dict[str, str] = {}
+        self.descriptions: dict[str, str] = {}
         self._in_json_ld = False
         self._script_parts: list[str] = []
 
@@ -60,6 +74,10 @@ class PageImageParser(HTMLParser):
             content = values.get("content")
             if key in self.META_KEYS and content:
                 self.images.append(content)
+            elif key in self.TITLE_KEYS and content and key not in self.titles:
+                self.titles[key] = content
+            elif key in self.DESCRIPTION_KEYS and content and key not in self.descriptions:
+                self.descriptions[key] = content
         elif tag.lower() == "script" and values.get("type", "").lower() == "application/ld+json":
             self._in_json_ld = True
             self._script_parts = []
@@ -73,6 +91,24 @@ class PageImageParser(HTMLParser):
             self.json_ld.append("".join(self._script_parts))
             self._in_json_ld = False
             self._script_parts = []
+
+    @staticmethod
+    def _preferred(
+        values: dict[str, str], keys: tuple[str, ...], limit: int
+    ) -> str | None:
+        for key in keys:
+            text = clean_text(values.get(key) or "", limit)
+            if text:
+                return text
+        return None
+
+    @property
+    def title(self) -> str | None:
+        return self._preferred(self.titles, self.TITLE_KEYS, 200)
+
+    @property
+    def description(self) -> str | None:
+        return self._preferred(self.descriptions, self.DESCRIPTION_KEYS, 500)
 
 
 def _json_image_values(value: object) -> list[str]:
@@ -151,9 +187,14 @@ def classify_result_source(
     return source_kind, platform
 
 
-def clean_title(value: str) -> str:
+def clean_text(value: str, limit: int = 200) -> str | None:
+    """Collapse markup and whitespace, returning None when nothing is left."""
     without_tags = re.sub(r"<[^>]+>", " ", html.unescape(value or ""))
-    return " ".join(without_tags.split())[:200] or "Untitled public page"
+    return " ".join(without_tags.split())[:limit] or None
+
+
+def clean_title(value: str) -> str:
+    return clean_text(value) or "Untitled public page"
 
 
 def permission_denied_message(error: Exception) -> str:
@@ -424,48 +465,60 @@ class SearchService:
                 return None
         return None
 
-    async def _page_image_urls(
+    async def fetch_public_image(self, url: str) -> bytes | None:
+        """Download one public image using the same guards as candidate inspection."""
+        limits = httpx.Limits(max_connections=1, max_keepalive_connections=1)
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(self.settings.download_timeout_seconds),
+            limits=limits,
+            follow_redirects=False,
+            headers={"User-Agent": "FaceChainVerifier/0.2 (+local demo)"},
+        ) as client:
+            return await self._download(client, url)
+
+    async def _page_metadata(
         self, client: httpx.AsyncClient, initial_url: str
-    ) -> list[str]:
-        """Fetch bounded HTML and extract preview images without running JavaScript."""
+    ) -> PageMetadata:
+        """Fetch bounded HTML and extract preview images and text without running JavaScript."""
+        empty = PageMetadata()
         url = initial_url
         for redirect_number in range(self.settings.max_redirects + 1):
             if not await self._url_is_public(url):
-                return []
+                return empty
             try:
                 async with client.stream("GET", url) as response:
                     if response.is_redirect:
                         if redirect_number >= self.settings.max_redirects:
-                            return []
+                            return empty
                         location = response.headers.get("location")
                         if not location:
-                            return []
+                            return empty
                         url = urljoin(url, location)
                         continue
                     if response.status_code != 200:
-                        return []
+                        return empty
                     content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
                     if content_type not in {"text/html", "application/xhtml+xml"}:
-                        return []
+                        return empty
                     declared = response.headers.get("content-length")
                     if declared and int(declared) > self.settings.max_page_bytes:
-                        return []
+                        return empty
                     chunks: list[bytes] = []
                     total = 0
                     async for chunk in response.aiter_bytes():
                         total += len(chunk)
                         if total > self.settings.max_page_bytes:
-                            return []
+                            return empty
                         chunks.append(chunk)
                     raw_html = b"".join(chunks).decode("utf-8", errors="replace")
             except (httpx.HTTPError, ValueError):
-                return []
+                return empty
 
             parser = PageImageParser()
             try:
                 parser.feed(raw_html)
             except (ValueError, TypeError):
-                return []
+                return empty
             values = list(parser.images)
             for raw_json in parser.json_ld:
                 try:
@@ -482,8 +535,12 @@ class SearchService:
                     normalized.append(candidate)
                 if len(normalized) >= self.settings.per_page_image_limit:
                     break
-            return normalized
-        return []
+            return PageMetadata(
+                images=normalized,
+                title=parser.title,
+                description=parser.description,
+            )
+        return empty
 
     async def search(
         self,
@@ -581,7 +638,7 @@ class SearchService:
         timeout = httpx.Timeout(self.settings.download_timeout_seconds)
         semaphore = asyncio.Semaphore(self.settings.download_concurrency)
         results: list[dict[str, object]] = []
-        page_image_tasks: dict[str, asyncio.Task[list[str]]] = {}
+        page_metadata_tasks: dict[str, asyncio.Task[PageMetadata]] = {}
         images_examined = 0
 
         async with httpx.AsyncClient(
@@ -590,14 +647,18 @@ class SearchService:
             follow_redirects=False,
             headers={"User-Agent": "FaceChainVerifier/0.2 (+local demo)"},
         ) as client:
-            async def page_images(page_url: str, original_image_url: str) -> list[str]:
+            async def page_metadata(page_url: str, original_image_url: str) -> PageMetadata:
+                """Fetch a candidate page at most once, shared by every inspector."""
                 if normalize_url(page_url) == normalize_url(original_image_url):
-                    return []
-                task = page_image_tasks.get(page_url)
+                    return PageMetadata()
+                task = page_metadata_tasks.get(page_url)
                 if task is None:
-                    task = asyncio.create_task(self._page_image_urls(client, page_url))
-                    page_image_tasks[page_url] = task
+                    task = asyncio.create_task(self._page_metadata(client, page_url))
+                    page_metadata_tasks[page_url] = task
                 return await task
+
+            async def page_images(page_url: str, original_image_url: str) -> list[str]:
+                return (await page_metadata(page_url, original_image_url)).images
 
             async def inspect(item: tuple[CandidatePage, str, str]) -> dict[str, object] | None:
                 nonlocal images_examined
@@ -637,45 +698,65 @@ class SearchService:
                     source_kind, platform = classify_result_source(
                         page.page_url, candidate_url, match_type
                     )
-                    return {
+                    confirmation: dict[str, object] = {
                         "source_kind": source_kind,
                         "platform": platform,
                         "page_title": page.page_title,
                         "page_url": page.page_url,
+                        "image_url": candidate_url,
+                        "image_sha256": hashlib.sha256(content).hexdigest(),
+                        "image_bytes": len(content),
                         "provider_match_type": match_type,
                         "face_similarity": round(similarity, 4),
                         "thumbnail_data_url": thumbnail,
                         "discovery_provider": "+".join(sorted(page.discovery_providers)),
                     }
+                    if self.settings.evidence_store_images:
+                        # Consumed and removed by EvidenceService; it must never
+                        # reach the API response.
+                        confirmation["_image_content"] = content
+                    return confirmation
                 return None
 
             inspected = await asyncio.gather(*(inspect(item) for item in work))
             confirmed = [result for result in inspected if result is not None]
 
-        # A page can expose several matching image URLs. Keep its strongest confirmation.
-        by_page: dict[str, dict[str, object]] = {}
-        for result in confirmed:
-            page_url = str(result["page_url"])
-            current = by_page.get(page_url)
-            if current is None or (
-                result["provider_match_type"] == "full",
-                float(result["face_similarity"]),
-            ) > (
-                current["provider_match_type"] == "full",
-                float(current["face_similarity"]),
-            ):
-                by_page[page_url] = result
-        results = list(by_page.values())
+            # A page can expose several matching image URLs. Keep its strongest confirmation.
+            by_page: dict[str, dict[str, object]] = {}
+            for result in confirmed:
+                page_url = str(result["page_url"])
+                current = by_page.get(page_url)
+                if current is None or (
+                    result["provider_match_type"] == "full",
+                    float(result["face_similarity"]),
+                ) > (
+                    current["provider_match_type"] == "full",
+                    float(current["face_similarity"]),
+                ):
+                    by_page[page_url] = result
+            results = list(by_page.values())
 
-        results.sort(
-            key=lambda item: (
-                item["source_kind"] != "social_post",
-                item["provider_match_type"] == "visual",
-                item["provider_match_type"] != "full",
-                -float(item["face_similarity"]),
+            results.sort(
+                key=lambda item: (
+                    item["source_kind"] != "social_post",
+                    item["provider_match_type"] == "visual",
+                    item["provider_match_type"] != "full",
+                    -float(item["face_similarity"]),
+                )
             )
-        )
-        results = results[: self.settings.result_limit]
+            results = results[: self.settings.result_limit]
+
+            # Only the results that survive ranking are fingerprinted, so the post's
+            # own text is fetched at most `result_limit` times and usually comes
+            # from a page already in the cache.
+            async def attach_post_text(result: dict[str, object]) -> None:
+                metadata = await page_metadata(
+                    str(result["page_url"]), str(result["image_url"])
+                )
+                result["og_title"] = metadata.title
+                result["og_description"] = metadata.description
+
+            await asyncio.gather(*(attach_post_text(result) for result in results))
         social_count = sum(result["source_kind"] == "social_post" for result in results)
         return {
             "status": "matched" if social_count else "no_match",
