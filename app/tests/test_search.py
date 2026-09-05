@@ -316,3 +316,44 @@ def test_fingerprint_is_stable_across_runs(monkeypatch) -> None:
         digests.append(payload["results"][0]["image_sha256"])
 
     assert digests[0] == digests[1] == hashlib.sha256(image_body).hexdigest()
+
+
+def test_results_are_ranked_by_face_similarity_before_source_kind(monkeypatch) -> None:
+    settings = Settings(serpapi_api_key="test-key")
+
+    class ScoredFaceService(_StubFaceService):
+        def best_similarity(self, content, embeddings):
+            return {b"social": 0.72, b"web": 0.94}[content]
+
+    service = SearchService(settings, ScoredFaceService())
+
+    async def fake_discover(crop, variant):
+        return [
+            CandidatePage(
+                page_url="https://www.instagram.com/p/ABC123/",
+                page_title="Social result",
+                full_images={"https://cdn.example.com/social.jpg"},
+                discovery_providers={"serpapi"},
+            ),
+            CandidatePage(
+                page_url="https://example.com/person",
+                page_title="Web result",
+                full_images={"https://cdn.example.com/web.jpg"},
+                discovery_providers={"serpapi"},
+            ),
+        ]
+
+    async def fake_download(client, url):
+        return b"social" if url.endswith("social.jpg") else b"web"
+
+    async def fake_metadata(client, url):
+        return PageMetadata()
+
+    monkeypatch.setattr(service, "_serpapi_discover", fake_discover)
+    monkeypatch.setattr(service, "_download", fake_download)
+    monkeypatch.setattr(service, "_page_metadata", fake_metadata)
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+
+    payload = asyncio.run(service.search(b"upload", object(), _StubFace()))
+
+    assert [result["face_similarity"] for result in payload["results"]] == [0.94, 0.72]

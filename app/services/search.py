@@ -738,10 +738,11 @@ class SearchService:
 
             results.sort(
                 key=lambda item: (
+                    -float(item["face_similarity"]),
                     item["source_kind"] != "social_post",
                     item["provider_match_type"] == "visual",
                     item["provider_match_type"] != "full",
-                    -float(item["face_similarity"]),
+                    str(item["page_url"]),
                 )
             )
             results = results[: self.settings.result_limit]

@@ -27,6 +27,11 @@ function formatBytes(bytes) {
   return bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function formatSimilarityPercentage(score) {
+  const value = Number(score);
+  return Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : "N/A";
+}
+
 function updateContinueState() {
   $("#continue-button").disabled = !selectedFile;
   $("#selection-note").textContent = selectedFile ? "IMAGE LOADED" : "NO IMAGE SELECTED";
@@ -298,7 +303,7 @@ function buildResultCard(result) {
     ? "Full image match"
     : result.provider_match_type === "partial" ? "Partial image match" : "Visual face match";
   const providerLabel = result.discovery_provider?.includes("serpapi") ? "Google Lens" : "Google Vision";
-  details.textContent = `${matchLabel} · Face similarity ${Number(result.face_similarity).toFixed(3)} · ${providerLabel}`;
+  details.textContent = `${matchLabel} · Face similarity ${formatSimilarityPercentage(result.face_similarity)} · ${providerLabel}`;
   const link = document.createElement("a");
   link.className = "result-link";
   link.href = result.page_url;
